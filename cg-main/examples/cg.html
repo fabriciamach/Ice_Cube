@@ -8,8 +8,7 @@
   <script type="module">
     import * as THREE from '../build/three.module.js';
     import { OrbitControls } from './jsm/controls/OrbitControls.js';
-
-    // Inicializando o renderizador
+    
     const canvasRenderer = new THREE.WebGLRenderer({ antialias: true });
     canvasRenderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(canvasRenderer.domElement);
@@ -115,7 +114,7 @@
     const transparentClip = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0.2);
     const reflectedClip = new THREE.Plane(new THREE.Vector3(1, 0, 0), -0.2);
 
-    // Textura do plano divisor (gelo)
+    // Gelo
     const iceTexture = new THREE.TextureLoader().load('gelo.png');
     const iceMaterial = new THREE.ShaderMaterial({
   uniforms: {
@@ -168,12 +167,11 @@
     void main() {
       if (vWorldPosition.y < -2.0) discard;
 
-      // Vetores para cálculos de refração e reflexão
       vec3 viewDir = normalize(cameraPosition - vWorldPosition);
       vec3 normal = normalize(vNormal);
-      float eta = 1.0 / 1.31; // Índice de refração do gelo
+      float eta = 1.0 / 1.31; // Refração do gelo
 
-      // Dispersão da luz (arco-íris)
+      // Dispersão da luz
       vec3 refractedDirR = refract(viewDir, normal, eta - dispersionStrength);
       vec3 refractedDirG = refract(viewDir, normal, eta);
       vec3 refractedDirB = refract(viewDir, normal, eta + dispersionStrength);
@@ -183,25 +181,20 @@
       vec2 refractedUvG = vUv + refractedDirG.xy * refractionStrength;
       vec2 refractedUvB = vUv + refractedDirB.xy * refractionStrength;
 
-      // Textura refratada com dispersão
       vec4 transColorR = texture(transparentTexture, refractedUvR);
       vec4 transColorG = texture(transparentTexture, refractedUvG);
       vec4 transColorB = texture(transparentTexture, refractedUvB);
       vec4 transColor = vec4(transColorR.r, transColorG.g, transColorB.b, 1.0);
 
-      // Reflexão correta (baseada na posição do objeto no mundo)
       vec3 reflectDir = reflect(viewDir, normal);
       vec4 reflColor = texture(reflectedTexture, reflectDir.xy);
 
-      // Mistura reflexão e refração com base no Fresnel
       vec4 finalColor = mix(transColor, reflColor, vReflectionFactor);
 
-      // Textura adicional (gelo)
       vec4 iceColor = texture(iceTexture, vUv);
       iceColor.rgb *= 1.5;
       finalColor = mix(finalColor, iceColor, textureStrength);
 
-      // Transparência
       finalColor.a *= transparency;
 
       fragColor = finalColor;
