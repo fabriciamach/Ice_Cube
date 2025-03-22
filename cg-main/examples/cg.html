@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Custom Shader with Reflection and Transparency</title>
+</head>
+<body>
+  <script type="module">
+    import * as THREE from '../build/three.module.js';
+    import { OrbitControls } from './jsm/controls/OrbitControls.js';
+
+    // Inicializando o renderizador
+    const canvasRenderer = new THREE.WebGLRenderer({ antialias: true });
+    canvasRenderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(canvasRenderer.domElement);
+
+    // Criando a cena e a câmera
+    const worldScene = new THREE.Scene();
+    const mainCamera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+    mainCamera.position.set(0, 2, 10);
+    const cameraControls = new OrbitControls(mainCamera, canvasRenderer.domElement);
+
+    // Colocando uma textura de fundo
+    // Opção de testar outro plano de fundo "paisagem2.png"
+    const backgroundTexture = new THREE.CubeTextureLoader().load([
+      'paisagem.png', 'paisagem.png', 'paisagem.png',
+      'paisagem.png', 'paisagem.png', 'paisagem.png'
+    ]);
+    worldScene.background = backgroundTexture;
+
+    // Criando o chão
+    const groundTexture = new THREE.TextureLoader().load('texture_floor.jpg');
+    groundTexture.wrapS = THREE.ClampToEdgeWrapping;
+    groundTexture.wrapT = THREE.ClampToEdgeWrapping;
+
+    const groundMaterial = new THREE.ShaderMaterial({
+      uniforms: { groundTexture: { value: groundTexture } },
+      vertexShader: `
+        out vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        precision mediump float;
+        in vec2 vUv;
+        uniform sampler2D groundTexture;
+        out vec4 outColor;
+        void main() {
+          outColor = texture(groundTexture, vUv);
+        }
+      `,
+      glslVersion: THREE.GLSL3
+    });
+
+    const groundMesh = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), groundMaterial);
+    groundMesh.rotation.x = -Math.PI / 2;
+    groundMesh.position.y = -2;
+    worldScene.add(groundMesh);
+
+    // Criando os cubos
+    const cubeTexture = new THREE.TextureLoader().load('red-texture.jpg');
+    const cubeMaterial = new THREE.ShaderMaterial({
+      uniforms: { cubeTexture: { value: cubeTexture } },
+      vertexShader: `
+        #include <clipping_planes_pars_vertex>
+        out vec2 vUv;
+        void main() {
+          vUv = uv;
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mvPosition;
+          #if NUM_CLIPPING_PLANES > 0
+            vClipPosition = -mvPosition.xyz;
+          #endif
+        }
+      `,
+      fragmentShader: `
+        precision mediump float;
+        in vec2 vUv;
+        #include <clipping_planes_pars_fragment>
+        uniform sampler2D cubeTexture;
+        out vec4 outColor;
+        void main() {
+          #include <clipping_planes_fragment>
+          outColor = texture(cubeTexture, vUv);
+        }
+      `,
+      glslVersion: THREE.GLSL3,
+      clipping: true
+    });
+
+    const leftCube = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), cubeMaterial);
+    leftCube.position.set(-5, 0, 0);
+    worldScene.add(leftCube);
+
+    const rightCube = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), cubeMaterial);
+    rightCube.position.set(5, 1, 0);
+    worldScene.add(rightCube);
+
+    // Render targets para reflexão e transparência
+    const transparentScene = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat
+    });
+
+    const reflectedScene = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat
+    });
+
+    // Clipping planes para separar as cenas
+    const transparentClip = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0.2);
+    const reflectedClip = new THREE.Plane(new THREE.Vector3(1, 0, 0), -0.2);
+
+    // Textura do plano divisor (gelo)
+    const iceTexture = new THREE.TextureLoader().load('gelo.png');
+    const iceMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    fresnelBias: { value: 0.1 },
+    fresnelPower: { value: 4.0 },
+    fresnelScale: { value: 1.0 },
+    transparency: { value: 0.6 },
+    refractionStrength: { value: 0.1 },
+    dispersionStrength: { value: 0.2 },
+    textureStrength: { value: 0.6 },
+    transparentTexture: { value: transparentScene.texture },
+    reflectedTexture: { value: reflectedScene.texture },
+    iceTexture: { value: iceTexture }
+  },
+  vertexShader: `
+    uniform float fresnelBias;
+    uniform float fresnelPower;
+    uniform float fresnelScale;
+    out vec2 vUv;
+    out float vReflectionFactor;
+    out vec3 vWorldPosition;
+    out vec3 vNormal;
+
+    void main() {
+      vUv = uv;
+      vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+      vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+      vWorldPosition = worldPosition.xyz;
+      vNormal = normalize(mat3(modelMatrix) * normal);
+      vec3 I = worldPosition.xyz - cameraPosition;
+      vec3 worldNormal = normalize(mat3(modelMatrix) * normal);
+      vReflectionFactor = fresnelBias + fresnelScale * pow(1.0 + dot(normalize(I), worldNormal), fresnelPower);
+      gl_Position = projectionMatrix * mvPosition;
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D transparentTexture;
+    uniform sampler2D reflectedTexture;
+    uniform sampler2D iceTexture;
+    uniform float transparency;
+    uniform float refractionStrength;
+    uniform float dispersionStrength;
+    uniform float textureStrength;
+    in vec2 vUv;
+    in float vReflectionFactor;
+    in vec3 vWorldPosition;
+    in vec3 vNormal;
+    out vec4 fragColor;
+
+    void main() {
+      if (vWorldPosition.y < -2.0) discard;
+
+      // Vetores para cálculos de refração e reflexão
+      vec3 viewDir = normalize(cameraPosition - vWorldPosition);
+      vec3 normal = normalize(vNormal);
+      float eta = 1.0 / 1.31; // Índice de refração do gelo
+
+      // Dispersão da luz (arco-íris)
+      vec3 refractedDirR = refract(viewDir, normal, eta - dispersionStrength);
+      vec3 refractedDirG = refract(viewDir, normal, eta);
+      vec3 refractedDirB = refract(viewDir, normal, eta + dispersionStrength);
+
+      // Distorção das coordenadas de textura para cada componente de cor
+      vec2 refractedUvR = vUv + refractedDirR.xy * refractionStrength;
+      vec2 refractedUvG = vUv + refractedDirG.xy * refractionStrength;
+      vec2 refractedUvB = vUv + refractedDirB.xy * refractionStrength;
+
+      // Textura refratada com dispersão
+      vec4 transColorR = texture(transparentTexture, refractedUvR);
+      vec4 transColorG = texture(transparentTexture, refractedUvG);
+      vec4 transColorB = texture(transparentTexture, refractedUvB);
+      vec4 transColor = vec4(transColorR.r, transColorG.g, transColorB.b, 1.0);
+
+      // Reflexão correta (baseada na posição do objeto no mundo)
+      vec3 reflectDir = reflect(viewDir, normal);
+      vec4 reflColor = texture(reflectedTexture, reflectDir.xy);
+
+      // Mistura reflexão e refração com base no Fresnel
+      vec4 finalColor = mix(transColor, reflColor, vReflectionFactor);
+
+      // Textura adicional (gelo)
+      vec4 iceColor = texture(iceTexture, vUv);
+      iceColor.rgb *= 1.5;
+      finalColor = mix(finalColor, iceColor, textureStrength);
+
+      // Transparência
+      finalColor.a *= transparency;
+
+      fragColor = finalColor;
+    }
+  `,
+  transparent: true,
+  glslVersion: THREE.GLSL3
+  });
+
+    const icePlane = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), iceMaterial);
+    icePlane.position.set(0, 0, 0);
+    icePlane.rotation.y = Math.PI / 2;
+    icePlane.renderOrder = 1;
+    worldScene.add(icePlane);
+
+    // Ajustando o tamanho da janela
+    window.addEventListener('resize', () => {
+      mainCamera.aspect = window.innerWidth / window.innerHeight;
+      mainCamera.updateProjectionMatrix();
+      canvasRenderer.setSize(window.innerWidth, window.innerHeight);
+      transparentScene.setSize(window.innerWidth, window.innerHeight);
+      reflectedScene.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function animate() {
+      requestAnimationFrame(animate);
+      cameraControls.update();
+
+      icePlane.visible = false;
+      canvasRenderer.clippingPlanes = [transparentClip];
+      canvasRenderer.setRenderTarget(transparentScene);
+      canvasRenderer.clear();
+      canvasRenderer.render(worldScene, mainCamera);
+
+      canvasRenderer.clippingPlanes = [reflectedClip];
+      canvasRenderer.setRenderTarget(reflectedScene);
+      canvasRenderer.clear();
+      canvasRenderer.render(worldScene, mainCamera);
+
+      canvasRenderer.setRenderTarget(null);
+      canvasRenderer.clippingPlanes = [];
+      icePlane.visible = true;
+      icePlane.material.uniforms.transparentTexture.value = transparentScene.texture;
+      icePlane.material.uniforms.reflectedTexture.value = reflectedScene.texture;
+      canvasRenderer.render(worldScene, mainCamera);
+    }
+
+    animate();
+  </script>
+</body>
+</html>
