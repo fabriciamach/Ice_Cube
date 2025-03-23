@@ -20,7 +20,6 @@
     const cameraControls = new OrbitControls(mainCamera, canvasRenderer.domElement);
 
     // Colocando uma textura de fundo
-    // Opção de testar outro plano de fundo "paisagem2.png"
     const backgroundTexture = new THREE.CubeTextureLoader().load([
       'paisagem.png', 'paisagem.png', 'paisagem.png',
       'paisagem.png', 'paisagem.png', 'paisagem.png'
@@ -117,99 +116,97 @@
     // Gelo
     const iceTexture = new THREE.TextureLoader().load('gelo.png');
     const iceMaterial = new THREE.ShaderMaterial({
-    uniforms: {
-    reflectionBias: { value: 0.1 }, // Antes: fresnelBias
-    reflectionIntensity: { value: 4.0 }, // Antes: fresnelPower
-    reflectionScale: { value: 1.0 }, // Antes: fresnelScale
-    opacity: { value: 0.6 }, // Antes: transparency
-    distortionStrength: { value: 0.1 }, // Antes: refractionStrength
-    rainbowEffect: { value: 0.2 }, // Antes: dispersionStrength
-    textureVisibility: { value: 0.6 }, // Antes: textureStrength
-    seeThroughTexture: { value: transparentScene.texture }, // Antes: transparentTexture
-    mirrorTexture: { value: reflectedScene.texture }, // Antes: reflectedTexture
-    surfaceTexture: { value: iceTexture } // Antes: iceTexture
-    },
-    vertexShader: `
-    uniform float reflectionBias;
-    uniform float reflectionIntensity;
-    uniform float reflectionScale;
-    out vec2 vUv;
-    out float vReflectionFactor;
-    out vec3 vWorldPosition;
-    out vec3 vNormal;
+      uniforms: {
+        bias: { value: 0.1 },
+        power: { value: 4.0 },
+        scale: { value: 1.0 },
+        alpha: { value: 0.6 },
+        refraction: { value: 0.1 },
+        dispersion: { value: 0.2 },
+        textureBlend: { value: 0.6 },
+        seeThroughTexture: { value: transparentScene.texture },
+        mirrorTexture: { value: reflectedScene.texture },
+        iceLook: { value: iceTexture }
+      },
+      vertexShader: `
+        uniform float bias;
+        uniform float power;
+        uniform float scale;
+        out vec2 vUv;
+        out float reflectionAmount;
+        out vec3 worldPos;
+        out vec3 normalDir;
 
-    void main() {
-      vUv = uv;
-      vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-      vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-      vWorldPosition = worldPosition.xyz;
-      vNormal = normalize(mat3(modelMatrix) * normal);
-      vec3 I = worldPosition.xyz - cameraPosition;
-      vec3 worldNormal = normalize(mat3(modelMatrix) * normal);
-      vReflectionFactor = reflectionBias + reflectionScale * pow(1.0 + dot(normalize(I), worldNormal), reflectionIntensity);
-      gl_Position = projectionMatrix * mvPosition;
-    }
-    `,
-    fragmentShader: `
-    uniform sampler2D seeThroughTexture;
-    uniform sampler2D mirrorTexture;
-    uniform sampler2D surfaceTexture;
-    uniform float opacity;
-    uniform float distortionStrength;
-    uniform float rainbowEffect;
-    uniform float textureVisibility;
-    in vec2 vUv;
-    in float vReflectionFactor;
-    in vec3 vWorldPosition;
-    in vec3 vNormal;
-    out vec4 fragColor;
+        void main() {
+          vUv = uv;
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+          worldPos = worldPosition.xyz;
+          normalDir = normalize(mat3(modelMatrix) * normal);
+          vec3 I = worldPosition.xyz - cameraPosition;
+          vec3 worldNormal = normalize(mat3(modelMatrix) * normal);
+          reflectionAmount = bias + scale * pow(1.0 + dot(normalize(I), worldNormal), power);
+          gl_Position = projectionMatrix * mvPosition;
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D seeThroughTexture;
+        uniform sampler2D mirrorTexture;
+        uniform sampler2D iceLook;
+        uniform float alpha;
+        uniform float refraction;
+        uniform float dispersion;
+        uniform float textureBlend;
+        in vec2 vUv;
+        in float reflectionAmount;
+        in vec3 worldPos;
+        in vec3 normalDir;
+        out vec4 fragColor;
 
-    void main() {
-      if (vWorldPosition.y < -2.0) discard;
+        void main() {
+          if (worldPos.y < -2.0) discard;
 
-      // Vetores para cálculos de refração e reflexão
-      vec3 viewDir = normalize(cameraPosition - vWorldPosition);
-      vec3 normal = normalize(vNormal);
-      float refractionIndex = 1.0 / 1.31; // Índice de refração do gelo
+          vec3 viewDir = normalize(cameraPosition - worldPos);
+          vec3 normal = normalize(normalDir);
+          float eta = 1.0 / 1.31;
 
-      // Dispersão da luz (arco-íris)
-      vec3 refractedDirR = refract(viewDir, normal, refractionIndex - rainbowEffect);
-      vec3 refractedDirG = refract(viewDir, normal, refractionIndex);
-      vec3 refractedDirB = refract(viewDir, normal, refractionIndex + rainbowEffect);
+          vec3 refractedDirR = refract(viewDir, normal, eta - dispersion);
+          vec3 refractedDirG = refract(viewDir, normal, eta);
+          vec3 refractedDirB = refract(viewDir, normal, eta + dispersion);
 
-      // Distorção das coordenadas de textura para cada componente de cor
-      vec2 refractedUvR = vUv + refractedDirR.xy * distortionStrength;
-      vec2 refractedUvG = vUv + refractedDirG.xy * distortionStrength;
-      vec2 refractedUvB = vUv + refractedDirB.xy * distortionStrength;
+          vec2 refractedUvR = vUv + refractedDirR.xy * refraction;
+          vec2 refractedUvG = vUv + refractedDirG.xy * refraction;
+          vec2 refractedUvB = vUv + refractedDirB.xy * refraction;
 
-      // Textura refratada com dispersão
-      vec4 transColorR = texture(seeThroughTexture, refractedUvR);
-      vec4 transColorG = texture(seeThroughTexture, refractedUvG);
-      vec4 transColorB = texture(seeThroughTexture, refractedUvB);
-      vec4 transColor = vec4(transColorR.r, transColorG.g, transColorB.b, 1.0);
+          vec4 transColorR = texture(seeThroughTexture, refractedUvR);
+          vec4 transColorG = texture(seeThroughTexture, refractedUvG);
+          vec4 transColorB = texture(seeThroughTexture, refractedUvB);
+          vec4 transColor = vec4(transColorR.r, transColorG.g, transColorB.b, 1.0);
 
-      // Reflexão correta (baseada na posição do objeto no mundo)
-      vec3 reflectDir = reflect(viewDir, normal);
-      vec4 reflColor = texture(mirrorTexture, reflectDir.xy);
+          float criticalAngle = asin(1.0 / 1.31);
+          float incidenceAngle = acos(dot(normalize(viewDir), normal));
+          vec4 reflColor;
+          if (incidenceAngle > criticalAngle) {
+            vec3 reflectDir = reflect(viewDir, normal);
+            reflColor = texture(mirrorTexture, reflectDir.xy);
+          } else {
+            reflColor = texture(mirrorTexture, vUv);
+          }
 
-      // Mistura reflexão e refração com base no Fresnel
-      vec4 finalColor = mix(transColor, reflColor, vReflectionFactor);
+          vec4 finalColor = mix(transColor, reflColor, reflectionAmount);
 
-      // Textura adicional (gelo)
-      vec4 surfaceColor = texture(surfaceTexture, vUv);
-      surfaceColor.rgb *= 1.5;
-      finalColor = mix(finalColor, surfaceColor, textureVisibility);
+          vec4 iceColor = texture(iceLook, vUv);
+          iceColor.rgb *= 1.5;
+          finalColor = mix(finalColor, iceColor, textureBlend);
 
-      // Transparência
-      finalColor.a *= opacity;
+          finalColor.a *= alpha;
 
-      fragColor = finalColor;
-    }
-    `,
-    transparent: true,
-    glslVersion: THREE.GLSL3
+          fragColor = finalColor;
+        }
+      `,
+      transparent: true,
+      glslVersion: THREE.GLSL3
     });
-
 
     const icePlane = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), iceMaterial);
     icePlane.position.set(0, 0, 0);
@@ -244,8 +241,8 @@
       canvasRenderer.setRenderTarget(null);
       canvasRenderer.clippingPlanes = [];
       icePlane.visible = true;
-      icePlane.material.uniforms.transparentTexture.value = transparentScene.texture;
-      icePlane.material.uniforms.reflectedTexture.value = reflectedScene.texture;
+      icePlane.material.uniforms.seeThroughTexture.value = transparentScene.texture;
+      icePlane.material.uniforms.mirrorTexture.value = reflectedScene.texture;
       canvasRenderer.render(worldScene, mainCamera);
     }
 
